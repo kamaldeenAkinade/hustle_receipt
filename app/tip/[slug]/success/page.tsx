@@ -11,42 +11,47 @@ interface Props {
 }
 
 // Verify via Flutterwave v4 GET /charges/{id}
-// Reference: https://developer.flutterwave.com/docs/charging-a-card
+// Always calls Flutterwave regardless of current status — catches post-settlement reversals.
 async function verifyAndSaveTip(txRef: string): Promise<boolean> {
   const tip = await prisma.tip.findUnique({ where: { txRef } });
   if (!tip) return false;
 
-  // Already verified — idempotent on refresh
-  if (tip.status === "success") return true;
+  // No charge ID means payment never reached Flutterwave — can't verify
+  if (!tip.flwTxId) return tip.status === "success";
 
-  // No charge ID recorded means payment never reached Flutterwave
-  if (!tip.flwTxId) return false;
-
-  let json;
+  let res: Response;
+  let json: Record<string, unknown>;
   try {
-    const res = await flwFetch(`/charges/${tip.flwTxId}`);
-    json = await res.json();
+    res = await flwFetch(`/charges/${tip.flwTxId}`);
+    json = (await res.json()) as Record<string, unknown>;
   } catch {
-    return false;
+    // Network failure — preserve current status so a retry can succeed
+    return tip.status === "success";
   }
+
+  // Transient Flutterwave error (5xx) — do not poison the record
+  if (!res.ok) return tip.status === "success";
+
+  const data = json.data as Record<string, unknown> | undefined;
 
   // v4 success status is "succeeded" (not "successful" like v3)
-  if (
-    json.data?.status !== "succeeded" ||
-    json.data?.reference !== txRef
-  ) {
-    await prisma.tip.update({
-      where: { txRef },
-      data: { status: "failed" },
+  if (data?.status === "succeeded" && data?.reference === txRef) {
+    // Atomic write: only promotes pending → success; skips if already success
+    // (prevents double side-effects when two requests race on the same txRef)
+    await prisma.tip.updateMany({
+      where: { txRef, status: "pending" },
+      data: { status: "success" },
     });
-    return false;
+    return true;
   }
 
-  await prisma.tip.update({
-    where: { txRef },
-    data: { status: "success" },
+  // Flutterwave explicitly says the charge did not succeed or has reversed —
+  // downgrade if not already failed (handles post-settlement reversal)
+  await prisma.tip.updateMany({
+    where: { txRef, status: { not: "failed" } },
+    data: { status: "failed" },
   });
-  return true;
+  return false;
 }
 
 export default async function SuccessPage({ params, searchParams }: Props) {

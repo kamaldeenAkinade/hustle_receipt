@@ -1,3 +1,4 @@
+import "server-only";
 // Flutterwave v4 API helper
 // Auth: OAuth 2.0 — client_credentials → access_token (10-min expiry)
 // Sandbox base: https://developersandbox-api.flutterwave.com

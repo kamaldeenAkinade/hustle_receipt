@@ -7,6 +7,12 @@ datasource db {
   provider = "sqlite"
 }
 
+enum TipStatus {
+  pending
+  success
+  failed
+}
+
 model User {
   id             String   @id @default(cuid())
   name           String
@@ -20,15 +26,15 @@ model User {
 }
 
 model Tip {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   creatorId   String
-  creator     User     @relation(fields: [creatorId], references: [id])
+  creator     User      @relation(fields: [creatorId], references: [id])
   tipperName  String?
   tipperEmail String
   amount      Int
   message     String?
-  txRef       String   @unique
-  flwTxId     String?
-  status      String   @default("pending")
-  createdAt   DateTime @default(now())
+  txRef       String    @unique
+  flwTxId     String?   @unique
+  status      TipStatus @default(pending)
+  createdAt   DateTime  @default(now())
 }

@@ -1,9 +1,11 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { tipSchema } from "@/lib/validations";
 import { flwFetch, encryptCardField, generateNonce } from "@/lib/flutterwave";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export type TipActionResult = {
   errors?: Record<string, string[]>;
@@ -25,6 +27,18 @@ export async function initiateTipAction(
   _prev: TipActionResult,
   formData: FormData
 ): Promise<TipActionResult> {
+  // Rate limit by IP: 10 tip attempts per 15 minutes per IP
+  const headersList = await headers();
+  const ip =
+    headersList.get("x-forwarded-for")?.split(",")[0].trim() ??
+    headersList.get("x-real-ip") ??
+    "unknown";
+  if (!checkRateLimit(ip)) {
+    return {
+      message: "Too many requests. Please wait a few minutes before trying again.",
+    };
+  }
+
   // Strip spaces from card number before validation
   const rawCardNumber = (formData.get("cardNumber") as string | null) ?? "";
 
@@ -99,7 +113,6 @@ export async function initiateTipAction(
   const txRef = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
 
   // --- Step 1: Create customer ---
-  // name is optional — only include it when both first and last are present
   const parsedName = parseName(name);
   const customerPayload: Record<string, unknown> = { email };
   if (parsedName) customerPayload.name = parsedName;
@@ -158,23 +171,13 @@ export async function initiateTipAction(
   }
   const paymentMethodId: string = (pmJson.data as Record<string, unknown>).id as string;
 
-  // --- Save pending tip to DB ---
-  await prisma.tip.create({
-    data: {
-      creatorId: creator.id,
-      tipperName: name ?? null,
-      tipperEmail: email,
-      amount,
-      message: message ?? null,
-      txRef,
-      status: "pending",
-    },
-  });
-
   const baseUrl =
     process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000";
 
   // --- Step 3: Create charge ---
+  // The charge is created BEFORE the DB record so that we can store chargeId
+  // (flwTxId) in a single prisma.tip.create — eliminating the crash window
+  // where the DB row could exist without a flwTxId.
   let chargeJson: Record<string, unknown>;
   try {
     const chargeRes = await flwFetch("/charges", {
@@ -204,13 +207,24 @@ export async function initiateTipAction(
   const chargeData = chargeJson.data as Record<string, unknown>;
   const chargeId = chargeData.id as string;
 
-  // Record charge ID so success page can verify
-  await prisma.tip.update({
-    where: { txRef },
-    data: { flwTxId: chargeId },
+  // --- Step 4: Persist tip — single write with both txRef and flwTxId ---
+  // Doing this after charge creation means no second UPDATE is ever needed.
+  // If this write fails the charge exists on Flutterwave but no tip row is
+  // created, so the creator's dashboard is unaffected and no funds are credited.
+  await prisma.tip.create({
+    data: {
+      creatorId: creator.id,
+      tipperName: name ?? null,
+      tipperEmail: email,
+      amount,
+      message: message ?? null,
+      txRef,
+      flwTxId: chargeId,
+      status: "pending",
+    },
   });
 
-  // --- Step 4: Handle next_action ---
+  // --- Step 5: Handle next_action ---
   const nextAction = chargeData.next_action as Record<string, unknown> | undefined;
 
   // PIN authorization required (common for Nigerian cards in sandbox)
@@ -218,7 +232,9 @@ export async function initiateTipAction(
     nextAction?.type === "authorize" &&
     (nextAction?.authorization as Record<string, unknown>)?.type === "pin"
   ) {
-    // Sandbox test PIN is always 12345 — in production collect from user
+    // TODO (pre-launch): collect PIN from the user via a second form step
+    // instead of hardcoding the sandbox PIN. The current value only works
+    // with Flutterwave sandbox test cards and will fail for real cards.
     const encPin = await encryptCardField("12345", encKey, nonce);
 
     const pinRes = await flwFetch(`/charges/${chargeId}`, {
