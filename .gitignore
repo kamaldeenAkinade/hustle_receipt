@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# env files — never commit credentials
+.env
+.env.local
+.env*.local
+
+# Prisma generated client
+app/generated/
+
+# database
+*.db
+*.db-shm
+*.db-wal
+
+# misc
+.DS_Store
+*.tsbuildinfo
