@@ -21,3 +21,4 @@ app/generated/
 # misc
 .DS_Store
 *.tsbuildinfo
+.vercel

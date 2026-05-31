@@ -2,12 +2,11 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 import { defineConfig } from "prisma/config";
 
+// Prisma CLI (db push / migrate) only supports file: URLs.
+// The libsql:// Turso URL is handled at runtime via the adapter in lib/prisma.ts.
 export default defineConfig({
   schema: "prisma/schema.prisma",
-  migrations: {
-    path: "prisma/migrations",
-  },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: "file:./dev.db",
   },
 });
