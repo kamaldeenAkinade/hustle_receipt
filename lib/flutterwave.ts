@@ -9,7 +9,7 @@ const TOKEN_URL =
   "https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token";
 
 export const FLW_BASE =
-  process.env.NODE_ENV === "production" ? PROD_BASE : SANDBOX_BASE;
+  process.env.FLW_ENV === "production" ? PROD_BASE : SANDBOX_BASE;
 
 // Module-level token cache — valid within the same warm Node.js process instance
 let _cachedToken = "";
